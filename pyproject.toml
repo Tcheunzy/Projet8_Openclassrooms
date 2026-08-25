@@ -1,0 +1,22 @@
+[project]
+name = "projet8"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "catboost>=1.2.10",
+    "lightgbm>=4.7.0",
+    "matplotlib>=3.11.1",
+    "missingno>=0.5.2",
+    "mlflow>=1.27.0",
+    "networkx>=3.6.1",
+    "numpy>=2.5.2",
+    "optuna>=4.9.0",
+    "pandas>=3.0.5",
+    "scikit-learn>=1.9.0",
+    "scipy>=1.18.1",
+    "seaborn>=0.13.2",
+    "shap>=0.52.0",
+    "xgboost>=3.4.1",
+]
