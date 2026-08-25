@@ -1,0 +1,17 @@
+name : CI
+
+on:
+    push:
+        branches:
+            - main
+            - 'feature/**'
+    pull_request:
+        branches:
+            - main
+
+jobs:
+    tests:
+        runs-on: ubuntu-latest
+        services:
+            postgres:
+                image : postgres:16
