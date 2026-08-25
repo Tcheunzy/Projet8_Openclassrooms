@@ -13,4 +13,8 @@ wheels/
 data
 
 #mlflow
-mlflow.db
+mlflow.dbmlartifacts/
+mlruns/
+mlartifacts/
+mlruns/
+*.db
