@@ -32,4 +32,13 @@ dev = [
     "matplotlib>=3.11.1",
     "pytest>=9.1.1",
     "httpx>=0.28.1",
+    "pytest-cov>=7.1.0",
+]
+[tool.coverage.run]
+omit = ["src/precompute_history.py", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
 ]

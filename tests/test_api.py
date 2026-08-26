@@ -48,3 +48,15 @@ def test_predict_rejette_une_valeur_invalide(client, valid_payload):
     response = client.post("/predict", json=valid_payload)
 
     assert response.status_code == 422
+
+def test_predict_renvoie_500_si_le_pipeline_echoue(client, valid_payload, monkeypatch):
+    """Une panne interne doit produire un 500 explicite, pas un plantage du serveur."""
+    def pipeline_en_panne(*args, **kwargs):
+        raise ValueError("panne simulée")
+
+    monkeypatch.setattr("api.main.clean_application", pipeline_en_panne)
+
+    response = client.post("/predict", json=valid_payload)
+
+    assert response.status_code == 500
+    assert "panne simulée" in response.json()["detail"]

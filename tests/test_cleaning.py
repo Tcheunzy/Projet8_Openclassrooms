@@ -42,3 +42,12 @@ def test_cap_column_plafonne_avec_deux_bornes():
 
     assert result["DEBT_TO_INCOME"].tolist() == [0.0, 0.3, 10.0]
     assert result["DEBT_TO_INCOME_CAPPED_FLAG"].tolist() == [True, False, True]
+
+def test_handle_days_anomaly_ignore_une_colonne_absente():
+    """Une colonne absente est ignorée silencieusement, sans lever d'erreur."""
+    df = pd.DataFrame({"AUTRE_COLONNE": [1, 2]})
+
+    result = handle_days_anomaly(df, columns=["DAYS_EMPLOYED"])
+
+    assert "DAYS_EMPLOYED_ANOM" not in result.columns
+    assert result["AUTRE_COLONNE"].tolist() == [1, 2]
