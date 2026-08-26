@@ -3,9 +3,9 @@ import json
 import joblib
 import pandas as pd
 
-from cleaning import handle_days_anomaly, apply_document_grouping, cap_column
-from aggregation import aggregate_table, aggregate_bureau, aggregate_previous_application
-from feature_engineering import (
+from src.cleaning import handle_days_anomaly, apply_document_grouping, cap_column
+from src.aggregation import aggregate_table, aggregate_bureau, aggregate_previous_application
+from src.feature_engineering import (
     add_application_ratios,
     add_debt_to_income,
     add_ext_source_features,
@@ -215,13 +215,12 @@ if __name__ == "__main__":
     )
 
     print("Shape :", result.shape)
-    
+
     X = transform_for_model(result, preprocessor)
     print("Transform OK :", X.shape)
 
     import mlflow.lightgbm
-    mlflow.set_tracking_uri("http://127.0.0.1:5001")
-    model = mlflow.lightgbm.load_model("models:/home_credit_scoring_model/4")
+    model = mlflow.lightgbm.load_model(str(ROOT / "models" / "mlflow_model"))
     proba = model.predict_proba(X)[:, 1]
     print("Probabilités de défaut — 5 premiers clients :", proba[:5].round(4))
     print("Taux de défaut prédit (seuil 0.24) :", (proba > 0.24).mean().round(4))

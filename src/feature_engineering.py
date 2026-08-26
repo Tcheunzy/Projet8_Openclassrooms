@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from cleaning import cap_column
+from src.cleaning import cap_column
 
 
 def replace_infinities(df: pd.DataFrame) -> pd.DataFrame:
