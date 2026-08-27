@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.141.1",
+    "gradio>=6.26.0",
+    "httpx>=0.28.1",
     "missingno>=0.5.2",
     "mlflow>=3.0,<4",
     "networkx>=3.6.1",

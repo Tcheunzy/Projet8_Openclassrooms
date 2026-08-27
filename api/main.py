@@ -105,3 +105,8 @@ def predict(payload: ClientPredictionInput):
 
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erreur lors de la prédiction : {exc}")
+
+import gradio as gr
+from api.gradio_app import build_demo
+
+app = gr.mount_gradio_app(app, build_demo(), path="/gradio")
