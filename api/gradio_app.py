@@ -9,7 +9,7 @@ import os
 import gradio as gr
 import httpx
 
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+API_URL = os.getenv("API_URL", f"http://localhost:{os.getenv('PORT', '8000')}")
 
 # Doit correspondre exactement au Literal de api/schemas.py
 EDUCATION = [

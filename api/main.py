@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import joblib
-import mlflow.lightgbm
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 
@@ -34,7 +33,7 @@ ml = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Charge modèle et artefacts une seule fois, au démarrage du serveur."""
-    ml["model"] = mlflow.lightgbm.load_model(str(ROOT / "models" / "mlflow_model"))
+    ml["model"] = joblib.load(ROOT / "models" / "model.joblib")
     ml["preprocessor"] = joblib.load(ROOT / "models" / "preprocessor.joblib")
     ml["params"] = load_params(ROOT / "models" / "preprocessing_params.json")
 
