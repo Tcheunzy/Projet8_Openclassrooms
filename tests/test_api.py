@@ -60,3 +60,9 @@ def test_predict_renvoie_500_si_le_pipeline_echoue(client, valid_payload, monkey
 
     assert response.status_code == 500
     assert "panne simulée" in response.json()["detail"]
+
+def test_interface_gradio_est_montee(client):
+    """L'interface doit rester accessible après toute évolution de l'API."""
+    response = client.get("/gradio")
+
+    assert response.status_code == 200
