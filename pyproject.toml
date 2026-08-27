@@ -10,14 +10,12 @@ dependencies = [
     "httpx>=0.28.1",
     "joblib>=1.5.3",
     "lightgbm>=4.7.0",
-    "mlflow>=3.0,<4",
     "numpy>=2.5.2",
     "pandas>=2.2,<3",
     "protobuf<6",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.4",
     "scikit-learn>=1.9.0",
-    "skops>=0.14.0",
     "uvicorn>=0.52.4",
 ]
 [dependency-groups]
@@ -31,11 +29,13 @@ train = [
     "catboost>=1.2.10",
     "matplotlib>=3.11.1",
     "missingno>=0.5.2",
+    "mlflow>=3.15.2",
     "networkx>=3.6.1",
     "optuna>=4.9.0",
     "scipy>=1.18.1",
     "seaborn>=0.13.2",
     "shap>=0.52.0",
+    "skops>=0.14.0",
     "xgboost>=3.4.1",
 ]
 [tool.coverage.run]
