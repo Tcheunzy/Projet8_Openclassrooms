@@ -24,3 +24,13 @@ jobs:
 
       - name: Lancer les tests
         run: uv run pytest -v --cov=src --cov=api --cov-report=term-missing --cov-fail-under=90
+      
+      - name: Construire l'image Docker
+        run: docker build -t projet8-api .
+
+      - name: Vérifier que le conteneur démarre
+        run: |
+          docker run -d --name api -p 8000:8000 projet8-api
+          sleep 40
+          curl --fail http://localhost:8000/health
+          docker stop api
