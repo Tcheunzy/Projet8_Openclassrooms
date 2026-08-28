@@ -1,9 +1,15 @@
 """Fixtures partagées par tous les tests."""
+import os
+
+# Les tests ne doivent jamais ecrire dans la base de production.
+# load_dotenv() n'ecrase pas une variable deja definie : une chaine vide
+# suffit a desactiver la journalisation.
+os.environ["DATABASE_URL"] = ""
+
 import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
-
 
 @pytest.fixture(scope="module")
 def client():

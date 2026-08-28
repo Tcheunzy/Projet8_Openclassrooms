@@ -66,3 +66,28 @@ def test_interface_gradio_est_montee(client):
     response = client.get("/gradio")
 
     assert response.status_code == 200
+
+def test_predict_fonctionne_sans_base(client, valid_payload):
+    """L'API doit predire normalement quand aucune base n'est configuree."""
+    from api import main
+
+    assert main.ml["pool"] is None
+
+    response = client.post("/predict", json=valid_payload)
+
+    assert response.status_code == 200
+
+
+def test_journalisation_absorbe_une_panne_de_base(monkeypatch):
+    """Une base injoignable ne doit jamais faire remonter d'exception."""
+    from api import main
+
+    def echec(*args, **kwargs):
+        raise RuntimeError("base injoignable")
+
+    monkeypatch.setitem(main.ml, "pool", object())   # un pool factice, non nul
+    monkeypatch.setattr(main, "log_prediction", echec)
+
+    main._journaliser(sk_id_curr=1, model_version="4", threshold=0.24,
+                      probability=0.5, decision="refusé", history_found=False,
+                      latency_ms=10, features={})

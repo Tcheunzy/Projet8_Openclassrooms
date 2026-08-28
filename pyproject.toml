@@ -13,8 +13,10 @@ dependencies = [
     "numpy>=2.5.2",
     "pandas>=2.2,<3",
     "protobuf<6",
+    "psycopg[binary,pool]>=3.3.4",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.4",
+    "python-dotenv>=1.2.3",
     "scikit-learn>=1.9.0",
     "uvicorn>=0.52.4",
 ]
