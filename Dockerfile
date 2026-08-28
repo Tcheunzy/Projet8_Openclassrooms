@@ -19,6 +19,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 # --- Couche application : se reconstruit à chaque modification du code ---
 COPY api/ ./api/
 COPY src/ ./src/
+COPY database/ ./database/
 COPY models/ ./models/
 
 # Les exécutables de l'environnement virtuel deviennent accessibles directement
