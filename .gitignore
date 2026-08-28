@@ -21,3 +21,4 @@ mlruns/
 .coverage
 .coverage.*
 htmlcov/
+.env
