@@ -81,6 +81,7 @@ api/
   main.py                  endpoints, artefact loading at startup
   schemas.py               input/output contract (Pydantic)
   gradio_app.py            demo interface, an HTTP client of the API
+  security.py              API-key verification
 src/
   cleaning.py              anomalies, capping, column grouping
   aggregation.py           aggregation of the six auxiliary tables
@@ -91,6 +92,7 @@ src/
 database/
   predictions.py           connection pool, schema, insert and read
   init_db.py               one-off schema creation
+  migrate_status.py        adds failure tracking to an existing table
   comparer_latences.py     production latency, before and after optimisation
 benchmarks/
   profile_prediction.py    per-stage timing and cProfile of one prediction
@@ -106,7 +108,7 @@ models/
   application_columns.json     input contract
   reference.parquet            drift-detection reference sample
   history/*.parquet            per-client aggregations
-tests/                     36 unit and functional tests
+tests/                     40 unit and functional tests
 notebook/                  exploratory analysis and training (upstream project)
 Dockerfile                 production image
 ```
@@ -130,8 +132,19 @@ Four dependency groups are kept apart:
 | `monitoring` | Evidently, Streamlit — the dashboard only | `uv sync --group monitoring` |
 | `train` | MLflow, Optuna, SHAP — never deployed | `uv sync --group train` |
 
-Prediction logging needs a `DATABASE_URL`. Copy `.env.example` to `.env` and fill
-it in; without it the API runs normally and simply logs nothing.
+Copy `.env.example` to `.env` and fill it in. Every variable is optional and the
+API degrades gracefully without it: no `DATABASE_URL` means no logging, no
+`API_KEY` means an open endpoint. Both states are announced in the startup logs
+and reported by `/health`.
+
+```
+DATABASE_URL=postgresql://...     # prediction logging
+API_KEY=...                       # protects /predict
+THRESHOLD=0.24                    # business decision threshold
+MODEL_VERSION=4                   # returned with every response
+```
+
+Generate a key with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
 
 ## Running the API
 
@@ -147,6 +160,7 @@ uv run uvicorn api.main:app --reload --port 8000
 ```bash
 curl -X POST https://projet8-scoring-credit.onrender.com/predict \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d '{
     "SK_ID_CURR": 100002,
     "AMT_INCOME_TOTAL": 150000,
@@ -177,6 +191,8 @@ Response:
 }
 ```
 
+`/predict` requires an API key; `/` and `/health` do not — see *Security*.
+
 Only 14 fields are required — those without which a prediction would be
 meaningless. Any other column of the dataset can be passed through
 `extra_fields`, and whatever is still absent is imputed with the median learned
@@ -189,10 +205,18 @@ years and performs the conversion itself.
 
 ## Production monitoring
 
-Every prediction is written to PostgreSQL: the inputs received, the decision, the
-model version, the threshold applied and the end-to-end latency. Logging the
-**inputs** — not just the outcome — is what makes drift detection possible at
-all.
+Every call to `/predict` is written to PostgreSQL: the inputs received, the
+decision, the model version, the threshold applied, the end-to-end latency, and
+the outcome — `succes`, `validation` (rejected by the input contract) or
+`erreur` (the pipeline failed). Logging the **inputs** — not just the outcome —
+is what makes drift detection possible at all.
+
+Logging failures was an afterthought, and that is the point. The first version
+recorded only successful predictions, so the measured error rate was zero by
+construction — not because nothing failed, but because the table could not
+represent a failure. Rejected requests are also invisible from inside the route:
+FastAPI answers 422 during validation and `predict` is never called, so a
+dedicated exception handler is the only place they can be caught.
 
 ```bash
 uv run python -m database.init_db                 # create the table (once)
@@ -210,8 +234,15 @@ uv run python -m monitoring.simulate_traffic --n 800 --derive         # shifted 
 
 ### What the dashboard shows
 
-**Activity** — volume, refusal rate, median and 95th-percentile latency, share of
-clients found in the history store.
+**Activity** — call volume, error rate over time, refusal rate, median and
+95th-percentile latency, share of clients found in the history store.
+
+**Failures** — how many calls failed and why, split between `validation` and
+`erreur`. The distinction carries an operational consequence: a rise in
+`validation` means a caller is invoking the API incorrectly — a renamed field, a
+changed unit — and is settled by a conversation; a rise in `erreur` means the
+pipeline is breaking, and is settled by a fix. A single combined rate would hide
+which of the two is happening.
 
 **Drift** — how many input columns have moved away from the training
 distribution, which ones, and by how much. Evidently picks the statistical test
@@ -316,7 +347,7 @@ uv run pytest -v
 uv run pytest --cov=src --cov=api --cov-report=term-missing
 ```
 
-36 tests, roughly 92% coverage on `src/` and `api/` (the CI enforces a 90%
+40 tests, roughly 92% coverage on `src/` and `api/` (the CI enforces a 90%
 floor). No test depends on the `data/` folder, on a database, or on a running
 MLflow server: the suite runs on a bare machine, which is what makes continuous
 integration possible at all.
@@ -328,16 +359,24 @@ integration possible at all.
 | `test_feature_engineering.py` | late-payment detection |
 | `test_pipeline.py` | orchestration, and ordering of operations |
 | `test_schemas.py` | validation: missing field, out-of-range value, wrong type |
-| `test_api.py` | endpoints, unknown client, internal failure, DB outage |
+| `test_api.py` | endpoints, unknown client, internal failure, DB outage, API key, error logging |
 | `test_gradio.py` | unit conversion and error handling, with HTTP mocked |
 | `test_database.py` | parameter ordering of the insert, with a stub pool |
 | `test_drift.py` | drift detection signals real shifts and stays silent otherwise |
 
-Two of these deserve a mention. `test_journalisation_absorbe_une_panne_de_base`
+Three of these deserve a mention. `test_journalisation_absorbe_une_panne_de_base`
 has no assertion at all: what it verifies is the *absence* of an exception when
-the database is unreachable. And `test_build_aggregations_produit_les_six_tables`
+the database is unreachable. `test_build_aggregations_produit_les_six_tables`
 checks an *ordering*, not a value — if sentinel handling ran after aggregation
-instead of before, one mean would be 182,371 instead of −500.
+instead of before, one mean would be 182,371 instead of −500. And
+`test_un_rejet_de_validation_est_journalise` intercepts `log_prediction` rather
+than the wrapper above it, so that what is asserted is the row that would reach
+the database, not merely the fact that a function was called.
+
+`conftest.py` clears `DATABASE_URL` and `API_KEY` before importing the
+application. Without that, the suite would inherit whatever sits in the
+developer's `.env` and pass or fail depending on the machine — which is precisely
+what happened when the API key was introduced: green in CI, red locally.
 
 ## Docker
 
@@ -354,12 +393,71 @@ require:
 docker run --rm -e PORT=10000 -p 10000:10000 projet8-api
 ```
 
+## Security
+
+`/predict` is protected by a shared API key, sent as an `X-API-Key` header and
+compared against the `API_KEY` environment variable. `/` and `/health` stay open:
+the hosting platform polls the health endpoint without credentials, and requiring
+a key there would fail every deployment and every CI run.
+
+This authenticates a **calling system**, not a user — no accounts, no passwords,
+no sessions. That is the right shape for an internal API consumed by a business
+application, and it is proportionate to what is at stake here: an unauthenticated
+model endpoint burns a 0.1-CPU instance, exposes a company asset, and — least
+obvious but most damaging — fills the monitoring data with traffic of unknown
+origin, which is what the drift analysis depends on.
+
+Three implementation details are deliberate.
+
+**The comparison uses `secrets.compare_digest`, not `==`.** A normal string
+comparison stops at the first differing character, so its runtime leaks how many
+characters were correct. Resisting that timing attack costs one line.
+
+**Without `API_KEY`, the API stays open** and logs a warning at startup. Same
+principle as the database: missing configuration must not stop the service, and
+the CI has to validate the image with no secret in sight.
+
+**The Gradio interface authenticates like any other client.** It runs in the same
+process as the API but calls it over HTTP, so it sends the header too — a direct
+consequence of making the interface a client of the API rather than a second
+entry point into the pipeline.
+
+Secrets live in `.env` locally (git-ignored), in the host's environment
+variables in production, and in GitHub Actions secrets for the deploy hook. None
+of them is ever committed; `.env.example` documents the names and nothing else.
+
+## Personal data
+
+The `predictions` table stores what the model was given: age, gender, income,
+family situation, employment history and external scores, keyed by the applicant
+identifier. That is personal data, and part of it is sensitive.
+
+**Purpose.** The data is stored for one reason: detecting distribution drift and
+operational failures. It is not used to re-score applicants, to build profiles,
+or for any purpose other than supervising the model.
+
+**Identifier.** `SK_ID_CURR` is the dataset's own pseudonymous key, not a real
+customer reference. In an actual deployment it should be hashed before storage,
+so that the monitoring database cannot be joined back to the customer base.
+
+**Retention.** Drift analysis needs a rolling window, not an archive. Ninety days
+is enough to compare against a reference and to investigate an incident;
+everything older should be deleted on a schedule. This project does not implement
+that deletion — it runs on a demonstration database — and that is a gap, not an
+omission to hide.
+
+**Minimisation.** Only the 23 columns the drift analysis actually reads are
+logged, not the full 121-column application. What is not stored cannot leak.
+
+**Access.** The database is reachable only through credentials held in the
+service's environment; the dashboard is not deployed publicly.
+
 ## CI/CD
 
 On every pull request and every push to `main`, GitHub Actions:
 
 1. rebuilds the environment from `uv.lock`;
-2. runs the 36 tests and enforces the coverage floor;
+2. runs the 40 tests and enforces the coverage floor;
 3. builds the Docker image;
 4. starts the container and queries `/health`.
 
@@ -530,7 +628,9 @@ produced it.
 - **`build_features` is not covered by automated tests.** It is verified by
   `uv run python -m src.pipeline`, which replays the full pipeline on 5,000 real
   clients. A synthetic test would have been more brittle and less convincing.
-- **The API is unauthenticated.** API-key protection is planned.
+- **A single shared API key**, with no rotation and no per-caller identity. Fine
+  for one consumer, insufficient the day there are several.
+- **Retention is documented but not enforced** — see *Personal data*.
 - **The bundled history covers 20,000 clients**, a demonstration subset. In
   production these aggregations would live in a database alongside the logs.
 - **The monitoring dashboard runs locally**, not as a deployed service.
@@ -545,7 +645,8 @@ produced it.
 
 ## Next steps
 
-- **API-key authentication**, the last gap in the service itself.
+- **Per-caller keys and rotation**, replacing the single shared secret.
+- **Scheduled deletion** of logged inputs older than ninety days.
 - **Deploying the monitoring dashboard**, so drift is visible without a laptop.
 - **Scheduled drift reports**, turning the dashboard from something someone opens
   into something that raises its hand.
