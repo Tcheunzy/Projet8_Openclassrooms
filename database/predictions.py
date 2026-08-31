@@ -28,14 +28,20 @@ CREATE INDEX IF NOT EXISTS idx_predictions_sk_id_curr
 
 
 def create_pool(min_size: int = 1, max_size: int = 4) -> ConnectionPool:
-    """Ouvre un réservoir de connexions réutilisables.
-
-    Établir une connexion TLS vers une base distante coûte plusieurs centaines
-    de millisecondes — davantage que la prédiction elle-même. Le réservoir les
-    garde ouvertes et les prête à la demande.
-    """
-    return ConnectionPool(os.environ["DATABASE_URL"],
-                          min_size=min_size, max_size=max_size, open=True)
+    """Ouvre un réservoir de connexions réutilisables."""
+    return ConnectionPool(
+        os.environ["DATABASE_URL"],
+        min_size=min_size,
+        max_size=max_size,
+        open=True,
+        # Vérifie qu'une connexion est vivante avant de la prêter. Sans cela,
+        # une connexion restée inactive et coupée par le réseau provoque une
+        # OperationalError au premier usage.
+        check=ConnectionPool.check_connection,
+        # Ferme les connexions inactives au-delà de 5 minutes plutôt que de
+        # les laisser vieillir.
+        max_idle=300,
+    )
 
 
 def init_schema(pool: ConnectionPool) -> None:

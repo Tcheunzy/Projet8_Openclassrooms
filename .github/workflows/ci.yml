@@ -20,7 +20,7 @@ jobs:
           enable-cache: true
 
       - name: Installer les dépendances
-        run: uv sync --frozen
+        run: uv sync --frozen --group monitoring
 
       - name: Lancer les tests
         run: uv run pytest -v --cov=src --cov=api --cov-report=term-missing --cov-fail-under=90

@@ -27,6 +27,10 @@ dev = [
     "httpx>=0.28.1",
     "pytest-cov>=7.1.0",
 ]
+monitoring = [
+    "evidently>=0.7.21",
+    "streamlit>=1.62.0",
+]
 train = [
     "catboost>=1.2.10",
     "matplotlib>=3.11.1",
