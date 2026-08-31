@@ -21,11 +21,19 @@ from src.pipeline import (
     get_expected_columns,
     load_params,
     merge_aggregations,
+    noms_de_features,
     transform_for_model,
-    noms_de_features
 )
 
 load_dotenv()
+
+# Sans cette configuration, le logger « api » hérite du niveau par défaut
+# (WARNING) et tous les messages d'information sont écartés avant d'atteindre
+# la sortie standard — donc avant d'arriver dans les journaux de l'hébergeur.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s : %(message)s",
+)
 logger = logging.getLogger("api")
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,7 +53,8 @@ async def lifespan(app: FastAPI):
     """Charge modèle et artefacts une seule fois, au démarrage du serveur."""
     ml["model"] = joblib.load(ROOT / "models" / "model.joblib")
     ml["preprocessor"] = joblib.load(ROOT / "models" / "preprocessor.joblib")
-        # Ces deux listes ne dépendent que du préprocesseur : les recalculer
+
+    # Ces deux listes ne dépendent que du préprocesseur : les recalculer
     # à chaque requête est du travail perdu.
     ml["expected_columns"] = get_expected_columns(ml["preprocessor"])
     ml["feature_names"] = noms_de_features(ml["preprocessor"])
@@ -67,6 +76,8 @@ async def lifespan(app: FastAPI):
             logger.info("Journalisation des predictions activee.")
         except Exception as exc:
             logger.warning("Base injoignable, journalisation desactivee : %s", exc)
+    else:
+        logger.warning("DATABASE_URL absente : journalisation desactivee.")
 
     yield
 
@@ -85,13 +96,15 @@ app = FastAPI(
 
 def _journaliser(**kwargs) -> None:
     """Enregistre une prédiction. N'échoue jamais : une panne de la base
-    ne doit pas remonter jusqu'à l'utilisateur."""
+    ne doit pas remonter jusqu'à l'utilisateur — mais elle doit laisser
+    une trace exploitable dans les journaux."""
     if ml.get("pool") is None:
+        logger.warning("Journalisation ignoree : aucun pool de connexions.")
         return
     try:
         log_prediction(ml["pool"], **kwargs)
     except Exception as exc:
-        logger.warning("Journalisation echouee : %s", exc)
+        logger.warning("Journalisation echouee : %s", exc, exc_info=True)
 
 
 @app.get("/", tags=["Monitoring"])
@@ -105,6 +118,7 @@ def health_check():
         "status": "healthy",
         "model_loaded": "model" in ml,
         "model_version": MODEL_VERSION,
+        "journalisation": ml.get("pool") is not None,
     }
 
 
@@ -161,7 +175,7 @@ def predict(payload: ClientPredictionInput, background_tasks: BackgroundTasks):
         )
 
     except Exception as exc:
+        logger.exception("Echec de la prediction pour %s", payload.SK_ID_CURR)
         raise HTTPException(status_code=500, detail=f"Erreur lors de la prédiction : {exc}")
-
 
 app = gr.mount_gradio_app(app, build_demo(), path="/gradio")
