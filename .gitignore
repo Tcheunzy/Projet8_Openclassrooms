@@ -1,4 +1,4 @@
-# Python-generated files
+# Python
 __pycache__/
 *.py[oc]
 build/
@@ -6,19 +6,30 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
+# Environnements virtuels
 .venv
 
-#data
-data
+# Secrets
+.env
 
-#mlflow
-mlflow.dbmlartifacts/
+# Données brutes (trop volumineuses pour Git)
+data/
+
+# MLflow
+mlflow.db
 mlruns/
 mlartifacts/
-mlruns/
 *.db
+
+# Tests et couverture
 .coverage
 .coverage.*
 htmlcov/
-.env
+.pytest_cache/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
