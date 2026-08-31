@@ -11,9 +11,15 @@ from pathlib import Path
 import httpx
 import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 
 from api.schemas import ClientPredictionInput
 
+# Sans ce chargement, API_KEY vaudrait None même quand le .env la définit,
+# et le générateur recevrait des 401 dès que l'API est protégée.
+load_dotenv()
+
+API_KEY = os.getenv("API_KEY")
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
@@ -89,7 +95,13 @@ def main():
         print("Mode dérive : crédits x1.8, revenus x0.6, population rajeunie, genre F")
 
     envoyes = ignores = echecs = 0
-    with httpx.Client(timeout=60.0) as client:
+
+    # La clé appartient à la session, pas à chaque requête : la placer sur le
+    # client évite d'avoir à y penser à chaque appel, et un oubli produirait
+    # ici 150 rejets d'affilée.
+    entetes = {"X-API-Key": API_KEY} if API_KEY else {}
+
+    with httpx.Client(timeout=60.0, headers=entetes) as client:
         for _, ligne in df.iterrows():
             if envoyes >= args.n:
                 break
@@ -101,6 +113,7 @@ def main():
 
             try:
                 reponse = client.post(f"{args.url}/predict", json=payload)
+
                 if reponse.status_code == 200:
                     envoyes += 1
                     if envoyes % 25 == 0:
@@ -116,9 +129,5 @@ def main():
     print(f"\n{envoyes} prédictions envoyées, {ignores} dossiers ignorés "
           f"(champ obligatoire manquant ou code sentinelle), {echecs} échecs")
 
-
-
-
 if __name__ == "__main__":
     main()
-

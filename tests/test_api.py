@@ -91,3 +91,78 @@ def test_journalisation_absorbe_une_panne_de_base(monkeypatch):
     main._journaliser(sk_id_curr=1, model_version="4", threshold=0.24,
                       probability=0.5, decision="refusé", history_found=False,
                       latency_ms=10, features={})
+
+from api import main
+from database.predictions import STATUT_ERREUR, STATUT_VALIDATION
+
+DOSSIER_VALIDE = {
+    "SK_ID_CURR": 100002,
+    "AMT_INCOME_TOTAL": 150000,
+    "AMT_CREDIT": 500000,
+    "AMT_ANNUITY": 25000,
+    "AMT_GOODS_PRICE": 450000,
+    "DAYS_BIRTH": -16000,
+    "DAYS_EMPLOYED": -2000,
+    "CNT_FAM_MEMBERS": 2,
+    "CNT_CHILDREN": 0,
+    "CODE_GENDER": "F",
+    "NAME_CONTRACT_TYPE": "Cash loans",
+    "FLAG_OWN_CAR": "Y",
+    "FLAG_OWN_REALTY": "Y",
+    "NAME_EDUCATION_TYPE": "Higher education",
+}
+
+
+def test_un_rejet_de_validation_est_journalise(client, monkeypatch):
+    """Une requête refusée par Pydantic doit laisser une trace.
+
+    Sans ce comportement, le taux d'erreur mesuré en production serait
+    structurellement nul : les rejets 422 n'atteignent jamais la route.
+    """
+    enregistres = []
+    monkeypatch.setitem(main.ml, "pool", object())
+    monkeypatch.setattr(main, "log_prediction",
+                        lambda pool, **kwargs: enregistres.append(kwargs))
+
+    incomplet = {"SK_ID_CURR": 100002}
+    response = client.post("/predict", json=incomplet)
+
+    assert response.status_code == 422
+    assert len(enregistres) == 1
+    assert enregistres[0]["status"] == STATUT_VALIDATION
+    assert enregistres[0]["sk_id_curr"] == 100002
+    assert "probability" not in enregistres[0] 
+
+
+def test_une_erreur_interne_est_journalisee(client, monkeypatch):
+    """Un échec du pipeline doit être enregistré avant que le 500 parte."""
+    enregistres = []
+    monkeypatch.setitem(main.ml, "pool", object())
+    monkeypatch.setattr(main, "log_prediction",
+                        lambda pool, **kwargs: enregistres.append(kwargs))
+    monkeypatch.setattr(main, "clean_application",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("panne")))
+
+    response = client.post("/predict", json=DOSSIER_VALIDE)
+
+    assert response.status_code == 500
+    assert len(enregistres) == 1
+    assert enregistres[0]["status"] == STATUT_ERREUR
+    assert enregistres[0]["error_type"] == "ValueError"
+
+def test_predict_refuse_une_requete_sans_cle(client, monkeypatch):
+    """Quand une clé est configurée, elle devient obligatoire."""
+    monkeypatch.setenv("API_KEY", "secret-de-test")
+
+    response = client.post("/predict", json=DOSSIER_VALIDE)
+
+    assert response.status_code == 401
+
+
+def test_predict_accepte_la_bonne_cle(client, monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret-de-test")
+
+    response = client.post("/predict", json=DOSSIER_VALIDE,
+                           headers={"X-API-Key": "secret-de-test"})
+
+    assert response.status_code == 200
