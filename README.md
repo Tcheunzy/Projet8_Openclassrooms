@@ -3,7 +3,8 @@
 [![CI](https://github.com/Tcheunzy/Projet8_Openclassrooms/actions/workflows/ci.yml/badge.svg)](https://github.com/Tcheunzy/Projet8_Openclassrooms/actions/workflows/ci.yml)
 
 Productionising a credit-scoring model: FastAPI service, Gradio demo interface,
-Docker image, CI/CD pipeline, and production monitoring with drift detection.
+Docker image, CI/CD pipeline, production monitoring with drift detection, and a
+profiled prediction path.
 
 The model (LightGBM, trained on the Home Credit dataset) estimates the
 probability that an applicant will default, and turns that probability into a
@@ -90,6 +91,9 @@ src/
 database/
   predictions.py           connection pool, schema, insert and read
   init_db.py               one-off schema creation
+  comparer_latences.py     production latency, before and after optimisation
+benchmarks/
+  profile_prediction.py    per-stage timing and cProfile of one prediction
 monitoring/
   build_reference.py       freezes the training-distribution reference
   drift.py                 Evidently analysis and result summary
@@ -229,6 +233,82 @@ columns still drifted: `AMT_GOODS_PRICE`, `AMT_CREDIT`, `AMT_ANNUITY`,
 younger population borrowing larger amounts than the one it learned from. That is
 a retraining signal, and the monitoring surfaced it.
 
+## Performance
+
+Latency was profiled before anything was optimised. `benchmarks/profile_prediction.py`
+times the nine stages of a prediction over 100 runs, and `cProfile` confirms the
+ranking function by function.
+
+```bash
+uv run python -m benchmarks.profile_prediction
+```
+
+The first measurement contradicted the intuition it was meant to confirm. The
+history lookup — six parquet tables scanned per request — was the suspected
+bottleneck; it accounted for 1% of the time. A single line of feature
+engineering accounted for more than the model itself.
+
+### What was changed
+
+**Infinity replacement, column by column, cost 29 ms.** Division-derived ratios
+can produce infinities, which were replaced through a loop over the 447 numeric
+columns. Applied to the whole frame instead, the same result costs 0.4 ms — pandas
+dispatches one vectorised pass rather than 447 assignments, each of which
+reallocated a column.
+
+**The output column contract was rebuilt on every request.** It only depends on
+`preprocessor.joblib`, so it is now read once at startup and stored alongside the
+model.
+
+**Feature names were recomputed on every request.** `get_feature_names_out()`
+followed by a regular expression over 575 names is not free, and the answer never
+changes. Same treatment: computed once in `lifespan`.
+
+None of the three touches the arithmetic. The control probability for client
+100002 is `0.107644` before and after, and the 36 tests pass unchanged — which is
+the only reason the gain is worth anything.
+
+### Result
+
+| | Local (100 runs) | Production median | Production p95 |
+|---|---|---|---|
+| Before | 27.9 ms | 961 ms | 1,925 ms |
+| After | 10.7 ms | 280 ms | 357 ms |
+| Gain | −62% | −71% | −81% |
+
+Production figures come from real logged calls — 154 before, 403 after — read
+back with `uv run python -m database.comparer_latences`.
+
+The p95 matters more than the median here: one call in twenty used to take over
+two seconds, and none now exceeds 360 ms. The spread collapsed further than the
+average did, which is what an API is judged on.
+
+### Why production gained forty times more than the laptop
+
+Locally the pipeline saved 17 ms per prediction. In production it saved 681 — a
+factor of about forty, which is exactly the CPU allowance of the free Render
+instance: 0.1 of a core.
+
+The two measurements are independent, one from a profiler and one from live
+traffic, and they agree. That agreement is the actual finding: **on constrained
+infrastructure, code optimisation is not a refinement, it is what makes the
+service usable.** The same 17 ms would have been invisible on a dedicated core.
+
+### Why ONNX Runtime was not adopted
+
+Converting the model to ONNX was the planned optimisation. Profiling made the
+case against it: after the three changes above, LightGBM inference is 0.86 ms of
+the remaining 10.7 — 8%. Even a free inference would cut a tenth of the latency.
+
+The remaining 92% is pandas and scikit-learn: cleaning, merging, feature
+engineering, encoding. ONNX does not cover that path, and exporting the model
+alone would add a conversion step, a second artefact to keep in sync with
+`preprocessor.joblib`, and a numerical-equivalence risk — for a gain smaller than
+the one already obtained by deleting a loop.
+
+The decision is therefore documented rather than implemented. Measuring first is
+what turned a plausible optimisation into a demonstrably wrong one.
+
 ## Tests
 
 ```bash
@@ -283,12 +363,33 @@ On every pull request and every push to `main`, GitHub Actions:
 3. builds the Docker image;
 4. starts the container and queries `/health`.
 
-The `main` branch is protected: nothing merges unless these checks pass. Render
-redeploys automatically on merge.
+The `main` branch is protected: nothing merges unless these checks pass.
 
 Building an image only proves it is syntactically valid; it is the fourth step —
 starting the container and getting an answer — that proves the application
 actually works inside it.
+
+### Deployment is triggered by the pipeline, not by the commit
+
+A fifth job calls Render's deploy hook, guarded by two conditions:
+
+```yaml
+deploy:
+  needs: tests
+  if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+```
+
+`needs: tests` is the point of the whole arrangement. Render's own auto-deploy
+setting reacts to commits and knows nothing about test results: a broken merge
+would reach production regardless. Routing the deployment through the pipeline
+means **nothing is deployed that has not been tested**.
+
+The second condition excludes pull requests. Without it, opening a PR against
+`main` would deploy unreviewed code, bypassing branch protection.
+
+The hook URL is a `RENDER_DEPLOY_HOOK` repository secret, so it never appears in
+the repository or in the workflow logs. Render's `Auto-Deploy` is set to `Off`,
+leaving a single path to production.
 
 ## Design decisions
 
@@ -364,6 +465,20 @@ This is deliberate and tested: `test_predict_fonctionne_sans_base` and
 `test_journalisation_absorbe_une_panne_de_base` both exist to keep it true. It is
 also what lets the CI validate the Docker image with no database in sight.
 
+Swallowing an exception has a cost, though, and it was paid before it was
+noticed: a batch of predictions went unrecorded while the API kept answering
+`healthy`, and nothing anywhere said so. Two changes closed that gap. Failures
+are now logged with their traceback, and `/health` reports the state of the
+logging path:
+
+```json
+{"status": "healthy", "model_loaded": true, "model_version": "4", "journalisation": true}
+```
+
+A degraded service that reports itself as healthy is worse than one that fails
+loudly, because it removes the only signal an operator has. Fault tolerance and
+silence are not the same thing.
+
 ### Drift needs volume, and the dashboard says so
 
 A simulation with **no** real drift — reference and current drawn from the same
@@ -422,12 +537,18 @@ produced it.
 - **The free PostgreSQL instance expires 30 days after creation.** The schema and
   the traffic generator make the setup reproducible in minutes.
 - **Free hosting spins down**, with the cold-start delay described above.
+- **The `predictions` table does not record where a call came from.** Separating
+  local calls from production ones in the latency comparison relies on a
+  threshold — 150 ms — which works only because the two populations are an order
+  of magnitude apart. A column would have been better than a heuristic, and the
+  lesson is that a logging table should carry the call's origin from day one.
 
-## Roadmap
+## Next steps
 
-**Step 4 — Performance.** Pipeline profiling, inference optimisation (ONNX
-Runtime), further memory reduction. Production latencies are already recorded per
-prediction, which provides the baseline to measure against.
+- **API-key authentication**, the last gap in the service itself.
+- **Deploying the monitoring dashboard**, so drift is visible without a laptop.
+- **Scheduled drift reports**, turning the dashboard from something someone opens
+  into something that raises its hand.
 
 ## Author
 
