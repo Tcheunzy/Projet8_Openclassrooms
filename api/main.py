@@ -10,11 +10,21 @@ import gradio as gr
 import joblib
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
 
 from api.gradio_app import build_demo
 from api.schemas import ClientPredictionInput, PredictionResponse
-from database.predictions import create_pool, log_prediction
+from database.predictions import (
+    STATUT_ERREUR,
+    STATUT_SUCCES,
+    STATUT_VALIDATION,
+    create_pool,
+    log_prediction,
+)
 from src.pipeline import (
     add_features,
     clean_application,
@@ -95,9 +105,9 @@ app = FastAPI(
 
 
 def _journaliser(**kwargs) -> None:
-    """Enregistre une prédiction. N'échoue jamais : une panne de la base
-    ne doit pas remonter jusqu'à l'utilisateur — mais elle doit laisser
-    une trace exploitable dans les journaux."""
+    """Enregistre un appel à /predict. N'échoue jamais : une panne de la base
+    ne doit pas remonter jusqu'à l'utilisateur — mais elle doit laisser une
+    trace exploitable dans les journaux."""
     if ml.get("pool") is None:
         logger.warning("Journalisation ignoree : aucun pool de connexions.")
         return
@@ -105,6 +115,46 @@ def _journaliser(**kwargs) -> None:
         log_prediction(ml["pool"], **kwargs)
     except Exception as exc:
         logger.warning("Journalisation echouee : %s", exc, exc_info=True)
+
+
+@app.exception_handler(RequestValidationError)
+async def journaliser_les_rejets(request: Request, exc: RequestValidationError):
+    """Enregistre les requêtes refusées par Pydantic.
+
+    Ces rejets se produisent AVANT l'entrée dans la route : FastAPI valide le
+    corps et répond 422 sans jamais appeler `predict`. Sans ce gestionnaire,
+    aucune requête invalide ne laisse de trace et le taux d'erreur mesuré est
+    structurellement nul.
+    """
+    erreurs = exc.errors()
+
+    try:
+        corps = await request.json()
+    except Exception:
+        corps = {}
+    if not isinstance(corps, dict):
+        corps = {}
+
+    premiere = erreurs[0] if erreurs else {}
+    champ = ".".join(str(p) for p in premiere.get("loc", [])[1:])
+    type_erreur = premiere.get("type", "inconnu")
+    error_type = f"{type_erreur}:{champ}" if champ else type_erreur
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(erreurs)},
+        # La journalisation part après l'envoi de la réponse, comme sur le
+        # chemin nominal : le client n'attend jamais l'écriture en base.
+        background=BackgroundTask(
+            _journaliser,
+            model_version=MODEL_VERSION,
+            threshold=THRESHOLD,
+            features=corps,
+            sk_id_curr=corps.get("SK_ID_CURR"),
+            status=STATUT_VALIDATION,
+            error_type=error_type,
+        ),
+    )
 
 
 @app.get("/", tags=["Monitoring"])
@@ -162,6 +212,7 @@ def predict(payload: ClientPredictionInput, background_tasks: BackgroundTasks):
             decision=decision,
             history_found=history_found,
             latency_ms=int((time.perf_counter() - debut) * 1000),
+            status=STATUT_SUCCES,
             features=features,
         )
 
@@ -176,6 +227,20 @@ def predict(payload: ClientPredictionInput, background_tasks: BackgroundTasks):
 
     except Exception as exc:
         logger.exception("Echec de la prediction pour %s", payload.SK_ID_CURR)
+        # Journalisation synchrone ici, et non par background_tasks : lorsque
+        # la route lève une exception, la réponse est construite par le
+        # gestionnaire d'erreurs de FastAPI et les tâches de fond enregistrées
+        # sur la requête ne sont jamais exécutées.
+        _journaliser(
+            model_version=MODEL_VERSION,
+            threshold=THRESHOLD,
+            features=payload.model_dump(exclude={"extra_fields"}),
+            sk_id_curr=payload.SK_ID_CURR,
+            latency_ms=int((time.perf_counter() - debut) * 1000),
+            status=STATUT_ERREUR,
+            error_type=type(exc).__name__,
+        )
         raise HTTPException(status_code=500, detail=f"Erreur lors de la prédiction : {exc}")
+
 
 app = gr.mount_gradio_app(app, build_demo(), path="/gradio")
