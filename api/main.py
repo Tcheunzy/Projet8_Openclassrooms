@@ -22,6 +22,7 @@ from src.pipeline import (
     load_params,
     merge_aggregations,
     transform_for_model,
+    noms_de_features
 )
 
 load_dotenv()
@@ -44,6 +45,10 @@ async def lifespan(app: FastAPI):
     """Charge modèle et artefacts une seule fois, au démarrage du serveur."""
     ml["model"] = joblib.load(ROOT / "models" / "model.joblib")
     ml["preprocessor"] = joblib.load(ROOT / "models" / "preprocessor.joblib")
+        # Ces deux listes ne dépendent que du préprocesseur : les recalculer
+    # à chaque requête est du travail perdu.
+    ml["expected_columns"] = get_expected_columns(ml["preprocessor"])
+    ml["feature_names"] = noms_de_features(ml["preprocessor"])
     ml["params"] = load_params(ROOT / "models" / "preprocessing_params.json")
 
     with open(ROOT / "models" / "application_columns.json") as f:
@@ -123,10 +128,10 @@ def predict(payload: ClientPredictionInput, background_tasks: BackgroundTasks):
         df = add_features(df, aggs, ml["params"])
 
         # ÉTAPE 3 — réaligner sur le contrat du modèle
-        df = df.reindex(columns=get_expected_columns(ml["preprocessor"]))
+        df = df.reindex(columns=ml["expected_columns"])
 
         # ÉTAPE 4 — prédire
-        X = transform_for_model(df, ml["preprocessor"])
+        X = transform_for_model(df, ml["preprocessor"], ml["feature_names"])
         proba = float(ml["model"].predict_proba(X)[0, 1])
         decision = "refusé" if proba > THRESHOLD else "accordé"
 

@@ -165,19 +165,19 @@ def build_features(app, bureau, bureau_balance, previous_app,
 import re
 
 
-def transform_for_model(df: pd.DataFrame, preprocessor) -> pd.DataFrame:
-    """
-    Applique le préprocesseur ajusté et restitue un DataFrame dont les noms de
-    colonnes sont nettoyés exactement comme à l'entraînement.
-    LightGBM refuse les caractères spéciaux JSON dans les noms de features
-    (issus des modalités one-hot du type "Trade: type 3"), d'où ce nettoyage —
-    qui doit être rigoureusement identique côté entraînement et côté service.
-    """
+def noms_de_features(preprocessor) -> list[str]:
+    """Noms des variables après prétraitement, nettoyés pour LightGBM.
+    À calculer une fois : ils ne dépendent que du préprocesseur ajusté."""
+    return [re.sub(r'[^A-Za-z0-9_]+', '_', str(c))
+            for c in preprocessor.get_feature_names_out()]
+
+
+def transform_for_model(df, preprocessor, colonnes=None):
     X = df.drop(columns=['SK_ID_CURR'], errors='ignore')
     transformed = preprocessor.transform(X)
-    columns = [re.sub(r'[^A-Za-z0-9_]+', '_', str(c))
-               for c in preprocessor.get_feature_names_out()]
-    return pd.DataFrame(transformed, columns=columns, index=X.index)
+    if colonnes is None:                    # appel hors ligne : on les calcule
+        colonnes = noms_de_features(preprocessor)
+    return pd.DataFrame(transformed, columns=colonnes, index=X.index)
 
 
 
