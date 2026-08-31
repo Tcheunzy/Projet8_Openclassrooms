@@ -1,9 +1,9 @@
-C# Credit Scoring — Prêt à dépenser
+# Credit Scoring — Prêt à dépenser
 
 [![CI](https://github.com/Tcheunzy/Projet8_Openclassrooms/actions/workflows/ci.yml/badge.svg)](https://github.com/Tcheunzy/Projet8_Openclassrooms/actions/workflows/ci.yml)
 
 Productionising a credit-scoring model: FastAPI service, Gradio demo interface,
-Docker image and CI/CD pipeline.
+Docker image, CI/CD pipeline, and production monitoring with drift detection.
 
 The model (LightGBM, trained on the Home Credit dataset) estimates the
 probability that an applicant will default, and turns that probability into a
@@ -16,6 +16,8 @@ lending decision using a threshold optimised on a business cost function.
 | Scoring interface | [/gradio](https://projet8-scoring-credit.onrender.com/gradio) | Loan officer |
 | API documentation | [/docs](https://projet8-scoring-credit.onrender.com/docs) | Integrating developer |
 | Health endpoint | [/health](https://projet8-scoring-credit.onrender.com/health) | Operations |
+
+The monitoring dashboard runs locally: `uv run streamlit run monitoring/dashboard.py`.
 
 > **The first request is slow.** The service runs on a free instance that spins
 > down after 15 minutes of inactivity. The first call after an idle period can
@@ -36,6 +38,10 @@ invisible: the model raises no error.
 
 Three mechanisms address it, detailed further down: **a single transformation
 codebase**, **frozen artefacts**, and **two column contracts**.
+
+Once the model is live, a second problem appears: the world moves and the model
+does not. Every prediction is therefore logged, and production inputs are
+compared against the training distribution — see *Production monitoring*.
 
 ## Architecture
 
@@ -60,9 +66,12 @@ The full path of a request:
                                         -> 575 features
  9.  Model                           LightGBM -> default probability
 10.  Business decision               probability > 0.24 -> declined
+11.  Response returned               the caller waits no longer than this
+12.  Background logging              inputs + decision + latency -> PostgreSQL
 ```
 
 Steps 4, 6 and 8 run **exactly the same code** as training, imported from `src/`.
+Step 12 runs *after* the response is sent, and never fails the request.
 
 ## Repository layout
 
@@ -76,15 +85,24 @@ src/
   aggregation.py           aggregation of the six auxiliary tables
   feature_engineering.py   business ratios and derived variables
   pipeline.py              orchestration and column contracts
-  precompute_history.py    offline aggregation job (re-run when history changes)
+  precompute_history.py    offline aggregation job
   export_model.py          exports the model out of the MLflow registry
+database/
+  predictions.py           connection pool, schema, insert and read
+  init_db.py               one-off schema creation
+monitoring/
+  build_reference.py       freezes the training-distribution reference
+  drift.py                 Evidently analysis and result summary
+  dashboard.py             Streamlit monitoring dashboard
+  simulate_traffic.py      traffic generator, with a drift mode
 models/
   model.joblib                 production model (frozen copy of version 4)
   preprocessor.joblib          fitted ColumnTransformer
   preprocessing_params.json    frozen thresholds and column lists
   application_columns.json     input contract
+  reference.parquet            drift-detection reference sample
   history/*.parquet            per-client aggregations
-tests/                     28 unit and functional tests
+tests/                     36 unit and functional tests
 notebook/                  exploratory analysis and training (upstream project)
 Dockerfile                 production image
 ```
@@ -99,13 +117,17 @@ cd Projet8_Openclassrooms
 uv sync
 ```
 
-Three dependency groups are kept apart:
+Four dependency groups are kept apart:
 
 | Group | Contents | Command |
 |---|---|---|
 | main | what the API loads to serve a prediction | `uv sync --no-dev` |
 | `dev` | pytest, coverage (installed by default) | `uv sync` |
+| `monitoring` | Evidently, Streamlit — the dashboard only | `uv sync --group monitoring` |
 | `train` | MLflow, Optuna, SHAP — never deployed | `uv sync --group train` |
+
+Prediction logging needs a `DATABASE_URL`. Copy `.env.example` to `.env` and fill
+it in; without it the API runs normally and simply logs nothing.
 
 ## Running the API
 
@@ -161,6 +183,52 @@ Durations follow the dataset convention: `DAYS_BIRTH` and `DAYS_EMPLOYED` are
 expressed in **negative days** before the application. The Gradio interface takes
 years and performs the conversion itself.
 
+## Production monitoring
+
+Every prediction is written to PostgreSQL: the inputs received, the decision, the
+model version, the threshold applied and the end-to-end latency. Logging the
+**inputs** — not just the outcome — is what makes drift detection possible at
+all.
+
+```bash
+uv run python -m database.init_db                 # create the table (once)
+uv run python -m monitoring.build_reference       # freeze the reference (once)
+uv run streamlit run monitoring/dashboard.py      # open the dashboard
+```
+
+To generate traffic against a running API:
+
+```bash
+uv run python -m monitoring.simulate_traffic --n 300                  # unknown clients
+uv run python -m monitoring.simulate_traffic --n 300 --source train   # known clients
+uv run python -m monitoring.simulate_traffic --n 800 --derive         # shifted population
+```
+
+### What the dashboard shows
+
+**Activity** — volume, refusal rate, median and 95th-percentile latency, share of
+clients found in the history store.
+
+**Drift** — how many input columns have moved away from the training
+distribution, which ones, and by how much. Evidently picks the statistical test
+per variable type: Wasserstein distance for numerical columns, Jensen-Shannon
+distance for categorical ones.
+
+**Distribution comparison** — reference against production for any column. The
+table says *which* variables drifted; this chart says *in which direction*.
+
+### What it found
+
+On roughly 1,300 production predictions, 9 of 22 columns were flagged. To check
+that this was not an artefact, `application_train` and `application_test` were
+compared directly at 10,000 rows each — where sampling noise is negligible. Five
+columns still drifted: `AMT_GOODS_PRICE`, `AMT_CREDIT`, `AMT_ANNUITY`,
+`NAME_CONTRACT_TYPE` and `DAYS_BIRTH`.
+
+**The drift is real.** The applications the model scores today come from a
+younger population borrowing larger amounts than the one it learned from. That is
+a retraining signal, and the monitoring surfaced it.
+
 ## Tests
 
 ```bash
@@ -168,9 +236,10 @@ uv run pytest -v
 uv run pytest --cov=src --cov=api --cov-report=term-missing
 ```
 
-28 tests, roughly 93% coverage (the CI enforces a 90% floor). No test depends on
-the `data/` folder or on a running MLflow server: the suite runs on a bare
-machine, which is what makes continuous integration possible at all.
+36 tests, roughly 92% coverage on `src/` and `api/` (the CI enforces a 90%
+floor). No test depends on the `data/` folder, on a database, or on a running
+MLflow server: the suite runs on a bare machine, which is what makes continuous
+integration possible at all.
 
 | File | Scope |
 |---|---|
@@ -179,8 +248,16 @@ machine, which is what makes continuous integration possible at all.
 | `test_feature_engineering.py` | late-payment detection |
 | `test_pipeline.py` | orchestration, and ordering of operations |
 | `test_schemas.py` | validation: missing field, out-of-range value, wrong type |
-| `test_api.py` | endpoints, unknown client, internal failure |
+| `test_api.py` | endpoints, unknown client, internal failure, DB outage |
 | `test_gradio.py` | unit conversion and error handling, with HTTP mocked |
+| `test_database.py` | parameter ordering of the insert, with a stub pool |
+| `test_drift.py` | drift detection signals real shifts and stays silent otherwise |
+
+Two of these deserve a mention. `test_journalisation_absorbe_une_panne_de_base`
+has no assertion at all: what it verifies is the *absence* of an exception when
+the database is unreachable. And `test_build_aggregations_produit_les_six_tables`
+checks an *ordering*, not a value — if sentinel handling ran after aggregation
+instead of before, one mean would be 182,371 instead of −500.
 
 ## Docker
 
@@ -202,7 +279,7 @@ docker run --rm -e PORT=10000 -p 10000:10000 projet8-api
 On every pull request and every push to `main`, GitHub Actions:
 
 1. rebuilds the environment from `uv.lock`;
-2. runs the 28 tests and enforces the coverage floor;
+2. runs the 36 tests and enforces the coverage floor;
 3. builds the Docker image;
 4. starts the container and queries `/health`.
 
@@ -276,6 +353,28 @@ The threshold is returned with every response so the caller can justify the
 decision, and read from the `THRESHOLD` environment variable so it can be tuned
 without rebuilding the image.
 
+### Monitoring must never break what it monitors
+
+Prediction logging runs as a FastAPI background task — after the response has
+been sent, so it costs the caller nothing — and every database error is caught
+and swallowed. If `DATABASE_URL` is unset or the database is down, the API serves
+predictions exactly as before and simply records nothing.
+
+This is deliberate and tested: `test_predict_fonctionne_sans_base` and
+`test_journalisation_absorbe_une_panne_de_base` both exist to keep it true. It is
+also what lets the CI validate the Docker image with no database in sight.
+
+### Drift needs volume, and the dashboard says so
+
+A simulation with **no** real drift — reference and current drawn from the same
+distribution — showed Evidently flagging 20% to 80% of columns at 157
+observations, and 0% from 2,000 onwards. Below a few hundred rows, a drift report
+mostly measures sampling noise.
+
+The dashboard therefore displays the sample size and warns explicitly below 500
+observations. A drift figure without its sample size misleads its reader, and a
+team that learns to ignore false alarms will ignore the real one too.
+
 ### MLflow removed from the serving path
 
 MLflow remains the source of truth during development — it versions and traces
@@ -318,16 +417,17 @@ produced it.
   clients. A synthetic test would have been more brittle and less convincing.
 - **The API is unauthenticated.** API-key protection is planned.
 - **The bundled history covers 20,000 clients**, a demonstration subset. In
-  production these aggregations would live in a database.
+  production these aggregations would live in a database alongside the logs.
+- **The monitoring dashboard runs locally**, not as a deployed service.
+- **The free PostgreSQL instance expires 30 days after creation.** The schema and
+  the traffic generator make the setup reproducible in minutes.
 - **Free hosting spins down**, with the cold-start delay described above.
 
 ## Roadmap
 
-**Step 3 — Production monitoring.** Prediction logging to PostgreSQL, data-drift
-analysis with Evidently, Streamlit monitoring dashboard.
-
 **Step 4 — Performance.** Pipeline profiling, inference optimisation (ONNX
-Runtime), further memory reduction.
+Runtime), further memory reduction. Production latencies are already recorded per
+prediction, which provides the baseline to measure against.
 
 ## Author
 
