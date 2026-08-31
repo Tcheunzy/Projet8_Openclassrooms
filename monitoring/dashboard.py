@@ -20,7 +20,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
-from database.predictions import create_pool, fetch_predictions
+from database.predictions import STATUT_SUCCES, create_pool, fetch_predictions
 from monitoring.drift import (charger_reference, construire_rapport,
                               preparer_courant, resume_derive)
 
@@ -58,17 +58,28 @@ def analyser(depuis):
 
     Les deux opérations sont regroupées pour n'avoir qu'une seule clé de
     cache — `depuis` — plutôt que d'avoir à hacher un DataFrame.
+
+    Deux jeux sont renvoyés : tous les appels, qui servent à mesurer le taux
+    d'erreur, et les seuls appels réussis, sur lesquels portent la dérive et
+    les indicateurs métier. Un appel rejeté ne contient par définition pas de
+    données valides : l'inclure dans une comparaison de distributions
+    reviendrait à mesurer la dérive sur des saisies fautives.
     """
     predictions = fetch_predictions(obtenir_pool(), since=depuis)
     reference = charger_reference(ROOT / "models" / "reference.parquet")
-    courant = preparer_courant(predictions, list(reference.columns))
+
+    if predictions.empty:
+        return predictions, predictions, reference, None, None, None, None
+
+    reussies = predictions[predictions["status"] == STATUT_SUCCES]
+    courant = preparer_courant(reussies, list(reference.columns))
 
     if len(courant) < 2:
-        return predictions, reference, courant, None, None, None
+        return predictions, reussies, reference, courant, None, None, None
 
     instantane = construire_rapport(reference, courant)
     bilan, detail = resume_derive(instantane)
-    return (predictions, reference, courant, bilan, detail,
+    return (predictions, reussies, reference, courant, bilan, detail,
             instantane.get_html_str(as_iframe=False))
 
 
@@ -81,6 +92,7 @@ def couleur_source():
         legend=alt.Legend(title=None, orient="top"),
     )
 
+
 def courbe_temporelle(serie, titre_y, couleur=BLEU, format_y=None):
     """Courbe avec points visibles : reste lisible même sur un seul intervalle."""
     donnees = serie.reset_index()
@@ -91,10 +103,12 @@ def courbe_temporelle(serie, titre_y, couleur=BLEU, format_y=None):
         .encode(
             x=alt.X("date:T", title=None),
             y=alt.Y("valeur:Q", title=titre_y,
+                    scale=alt.Scale(domainMin=0),
                     axis=alt.Axis(format=format_y) if format_y else alt.Axis()),
             tooltip=[alt.Tooltip("date:T"), alt.Tooltip("valeur:Q")],
         )
     )
+
 
 def densite_comparee(serie_ref, serie_cur, nom, bins=60):
     """Densités calculées en Python, sur des intervalles communs.
@@ -112,6 +126,8 @@ def densite_comparee(serie_ref, serie_cur, nom, bins=60):
         morceaux.append(pd.DataFrame({nom: centres, "densité": densite,
                                       "source": libelle}))
     return pd.concat(morceaux, ignore_index=True)
+
+
 # --------------------------------------------------------------- filtres
 st.sidebar.title("Filtres")
 libelle = st.sidebar.selectbox("Période observée", list(FENETRES))
@@ -129,55 +145,90 @@ st.sidebar.caption("Les données sont mises en cache 5 minutes.")
 st.title("Supervision du modèle de scoring crédit")
 st.caption("Prêt à dépenser — suivi des prédictions et détection de dérive")
 
-predictions, reference, courant, bilan, detail, rapport_html = analyser(depuis)
+predictions, reussies, reference, courant, bilan, detail, rapport_html = analyser(depuis)
 
 if predictions.empty:
-    st.info("Aucune prédiction enregistrée sur la période sélectionnée.")
+    st.info("Aucun appel enregistré sur la période sélectionnée.")
     st.stop()
 
 # Pas de temps adapté à la fenêtre : un graphique horaire sur 30 jours
 # serait illisible.
 pas = "1h" if (duree and duree <= timedelta(days=2)) else "1D"
 horodate = predictions.set_index("created_at").sort_index()
+horodate_ok = reussies.set_index("created_at").sort_index()
+
+echecs = predictions[predictions["status"] != STATUT_SUCCES]
 
 
 # --------------------------------------------------------------- activité
 st.header("Activité")
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Prédictions", f"{len(predictions):,}".replace(",", " "))
-c2.metric("Taux de refus", f"{(predictions['decision'] == 'refusé').mean():.1%}")
-c3.metric("Latence médiane", f"{predictions['latency_ms'].median():.0f} ms")
-c4.metric("Clients connus", f"{predictions['history_found'].mean():.0%}")
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Appels reçus", f"{len(predictions):,}".replace(",", " "))
+c2.metric("Taux d'erreur", f"{len(echecs) / len(predictions):.1%}",
+          help="Requêtes rejetées à la validation ou ayant échoué en cours "
+               "de traitement, rapportées au total des appels reçus.")
+c3.metric("Taux de refus", f"{(reussies['decision'] == 'refusé').mean():.1%}"
+          if not reussies.empty else "—")
+c4.metric("Latence médiane", f"{reussies['latency_ms'].median():.0f} ms"
+          if not reussies.empty else "—")
+c5.metric("Clients connus", f"{reussies['history_found'].mean():.0%}"
+          if not reussies.empty else "—")
 
 g1, g2 = st.columns(2)
 
 with g1:
     st.subheader("Volume dans le temps")
-    st.bar_chart(horodate["id"].resample(pas).count().rename("prédictions"))
+    st.bar_chart(horodate["id"].resample(pas).count().rename("appels"))
 
 with g2:
-    st.subheader("Taux de refus dans le temps")
-    refus = (horodate.assign(refuse=lambda d: d["decision"] == "refusé")["refuse"]
-             .resample(pas).mean())
-    st.altair_chart(courbe_temporelle(refus, "taux de refus", format_y="%"),
-                    use_container_width=True)
-    st.caption("Un décrochage se voit ici avant que la dérive statistique "
-               "ne devienne significative.")
+    st.subheader("Taux d'erreur dans le temps")
+    taux_erreur = (horodate.assign(echec=lambda d: d["status"] != STATUT_SUCCES)["echec"]
+                   .resample(pas).mean())
+    st.altair_chart(
+        courbe_temporelle(taux_erreur, "taux d'erreur", couleur=ROUGE, format_y=".0%"),
+        use_container_width=True,
+    )
+    st.caption("Une montée soudaine signale un changement chez l'appelant — "
+               "champ renommé, unité modifiée — avant toute dérive statistique.")
+
+if echecs.empty:
+    st.success("Aucun appel en erreur sur la période.")
+else:
+    st.subheader("Nature des erreurs")
+    repartition = (echecs.groupby(["status", "error_type"]).size()
+                   .rename("appels").reset_index()
+                   .sort_values("appels", ascending=False))
+    st.altair_chart(
+        alt.Chart(repartition).mark_bar(cornerRadius=3, color=ROUGE).encode(
+            y=alt.Y("error_type:N", sort="-x", title=None),
+            x=alt.X("appels:Q", title="appels"),
+            tooltip=["status", "error_type", "appels"],
+        ),
+        use_container_width=True,
+    )
+    st.caption("`validation` : requête refusée par le contrat d'entrée, la "
+               "faute est chez l'appelant. `erreur` : échec du pipeline, la "
+               "faute est de notre côté.")
+
+if reussies.empty:
+    st.info("Aucun appel réussi sur la période : pas de dérive à analyser.")
+    st.stop()
 
 g3, g4 = st.columns(2)
 
 with g3:
-    st.subheader("Distribution des probabilités de défaut")
-    effectifs, bornes = np.histogram(predictions["probability"],
-                                     bins=20, range=(0, 1))
-    st.bar_chart(pd.DataFrame({"effectif": effectifs},
-                              index=np.round(bornes[:-1], 2)))
-    st.caption("Seuil de décision : 0,24 — au-delà, le dossier est refusé.")
+    st.subheader("Taux de refus dans le temps")
+    refus = (horodate_ok.assign(refuse=lambda d: d["decision"] == "refusé")["refuse"]
+             .resample(pas).mean())
+    st.altair_chart(courbe_temporelle(refus, "taux de refus", format_y=".0%"),
+                    use_container_width=True)
+    st.caption("Un décrochage se voit ici avant que la dérive statistique "
+               "ne devienne significative.")
 
 with g4:
     st.subheader("Latence : médiane et 95ᵉ centile")
-    latences = (horodate["latency_ms"].resample(pas)
+    latences = (horodate_ok["latency_ms"].resample(pas)
                 .agg(médiane="median", p95=lambda s: s.quantile(0.95))
                 .reset_index()
                 .melt("created_at", var_name="mesure", value_name="ms"))
@@ -196,13 +247,20 @@ with g4:
     st.caption("La médiane seule masque les cas lents : le 95ᵉ centile dit "
                "ce que vit l'utilisateur le plus mal servi.")
 
+st.subheader("Distribution des probabilités de défaut")
+effectifs, bornes = np.histogram(reussies["probability"], bins=20, range=(0, 1))
+st.bar_chart(pd.DataFrame({"effectif": effectifs},
+                          index=np.round(bornes[:-1], 2)))
+st.caption("Seuil de décision : 0,24 — au-delà, le dossier est refusé.")
+
 
 # --------------------------------------------------------------- dérive
 st.header("Dérive des données")
 st.markdown(
     "Comparaison entre les dossiers reçus en production et un échantillon "
     "des données d'entraînement. Une dérive signale que la population a "
-    "évolué depuis l'apprentissage du modèle."
+    "évolué depuis l'apprentissage du modèle. Seuls les appels **réussis** "
+    "entrent dans cette comparaison."
 )
 
 if bilan is None:
