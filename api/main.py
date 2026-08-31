@@ -177,3 +177,5 @@ def predict(payload: ClientPredictionInput, background_tasks: BackgroundTasks):
     except Exception as exc:
         logger.exception("Echec de la prediction pour %s", payload.SK_ID_CURR)
         raise HTTPException(status_code=500, detail=f"Erreur lors de la prédiction : {exc}")
+
+app = gr.mount_gradio_app(app, build_demo(), path="/gradio")
