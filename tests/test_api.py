@@ -149,3 +149,20 @@ def test_une_erreur_interne_est_journalisee(client, monkeypatch):
     assert len(enregistres) == 1
     assert enregistres[0]["status"] == STATUT_ERREUR
     assert enregistres[0]["error_type"] == "ValueError"
+
+def test_predict_refuse_une_requete_sans_cle(client, monkeypatch):
+    """Quand une clé est configurée, elle devient obligatoire."""
+    monkeypatch.setenv("API_KEY", "secret-de-test")
+
+    response = client.post("/predict", json=DOSSIER_VALIDE)
+
+    assert response.status_code == 401
+
+
+def test_predict_accepte_la_bonne_cle(client, monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret-de-test")
+
+    response = client.post("/predict", json=DOSSIER_VALIDE,
+                           headers={"X-API-Key": "secret-de-test"})
+
+    assert response.status_code == 200

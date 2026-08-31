@@ -10,7 +10,7 @@ import gradio as gr
 import joblib
 import pandas as pd
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -18,6 +18,7 @@ from starlette.background import BackgroundTask
 
 from api.gradio_app import build_demo
 from api.schemas import ClientPredictionInput, PredictionResponse
+from api.security import verifier_cle
 from database.predictions import (
     STATUT_ERREUR,
     STATUT_SUCCES,
@@ -88,6 +89,11 @@ async def lifespan(app: FastAPI):
             logger.warning("Base injoignable, journalisation desactivee : %s", exc)
     else:
         logger.warning("DATABASE_URL absente : journalisation desactivee.")
+
+    if os.getenv("API_KEY"):
+        logger.info("Authentification par cle d'API activee sur /predict.")
+    else:
+        logger.warning("API_KEY absente : /predict est accessible sans authentification.")
 
     yield
 
@@ -164,15 +170,22 @@ def root():
 
 @app.get("/health", tags=["Monitoring"])
 def health_check():
+    """Point de contrôle, volontairement non authentifié.
+
+    La supervision de l'hébergeur l'interroge sans clé ; l'exiger ici ferait
+    échouer les vérifications de démarrage de Render et de la CI.
+    """
     return {
         "status": "healthy",
         "model_loaded": "model" in ml,
         "model_version": MODEL_VERSION,
         "journalisation": ml.get("pool") is not None,
+        "authentification": bool(os.getenv("API_KEY")),
     }
 
 
-@app.post("/predict", response_model=PredictionResponse, tags=["Prédiction"])
+@app.post("/predict", response_model=PredictionResponse, tags=["Prédiction"],
+          dependencies=[Depends(verifier_cle)])
 def predict(payload: ClientPredictionInput, background_tasks: BackgroundTasks):
     debut = time.perf_counter()
     try:

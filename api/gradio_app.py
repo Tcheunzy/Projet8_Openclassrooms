@@ -11,6 +11,12 @@ import httpx
 
 API_URL = os.getenv("API_URL", f"http://localhost:{os.getenv('PORT', '8000')}")
 
+# L'interface est montée dans le même processus que l'API, mais elle l'appelle
+# par HTTP comme n'importe quel client : elle doit donc s'authentifier comme
+# n'importe quel client. C'est la contrepartie du choix d'en faire un client
+# et non un appelant direct du pipeline.
+API_KEY = os.getenv("API_KEY")
+
 # Doit correspondre exactement au Literal de api/schemas.py
 EDUCATION = [
     "Lower secondary",
@@ -19,6 +25,14 @@ EDUCATION = [
     "Higher education",
     "Academic degree",
 ]
+
+
+def entetes() -> dict:
+    """En-têtes de la requête, avec la clé d'API si elle est configurée."""
+    valeurs = {"Content-Type": "application/json"}
+    if API_KEY:
+        valeurs["X-API-Key"] = API_KEY
+    return valeurs
 
 
 def predire(sk_id_curr, age, anciennete, genre, contrat, education,
@@ -54,9 +68,15 @@ def predire(sk_id_curr, age, anciennete, genre, contrat, education,
             payload[nom] = float(valeur)
 
     try:
-        response = httpx.post(f"{API_URL}/predict", json=payload, timeout=30.0)
+        response = httpx.post(f"{API_URL}/predict", json=payload,
+                              headers=entetes(), timeout=30.0)
     except httpx.RequestError as exc:
         return f"### Erreur de connexion à l'API\n\n`{exc}`"
+
+    if response.status_code == 401:
+        return ("### Accès refusé\n\n"
+                "L'API exige une clé d'authentification. Renseignez la "
+                "variable d'environnement `API_KEY` du service.")
 
     if response.status_code == 422:
         details = response.json()["detail"]

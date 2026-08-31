@@ -41,7 +41,7 @@ def test_predire_convertit_les_annees_en_jours_negatifs(monkeypatch):
     silencieusement toutes les prédictions de l'interface."""
     envoye = {}
 
-    def faux_post(url, json, timeout):
+    def faux_post(url, json, timeout, **kwargs):
         envoye.update(json)
         return FakeResponse(200, {
             "sk_id_curr": 100002, "probability": 0.08, "threshold": 0.24,
@@ -60,7 +60,7 @@ def test_predire_omet_les_scores_externes_non_renseignes(monkeypatch):
     """Un champ vidé dans l'interface ne doit pas être envoyé à l'API."""
     envoye = {}
 
-    def faux_post(url, json, timeout):
+    def faux_post(url, json, timeout, **kwargs):
         envoye.update(json)
         return FakeResponse(200, {
             "sk_id_curr": 1, "probability": 0.5, "threshold": 0.24,
@@ -78,7 +78,7 @@ def test_predire_omet_les_scores_externes_non_renseignes(monkeypatch):
 
 def test_predire_met_en_forme_la_decision(monkeypatch):
     """Le résultat affiché doit reprendre la décision et la probabilité."""
-    def faux_post(url, json, timeout):
+    def faux_post(url, json, timeout, **kwargs):
         return FakeResponse(200, {
             "sk_id_curr": 100002, "probability": 0.6033, "threshold": 0.24,
             "decision": "refusé", "mlflow_model_version": "4",
@@ -95,7 +95,7 @@ def test_predire_met_en_forme_la_decision(monkeypatch):
 
 def test_predire_affiche_le_champ_fautif_sur_un_422(monkeypatch):
     """Une erreur de validation doit nommer le champ en cause, pas rester opaque."""
-    def faux_post(url, json, timeout):
+    def faux_post(url, json, timeout, **kwargs):
         return FakeResponse(422, {
             "detail": [{
                 "loc": ["body", "AMT_CREDIT"],
@@ -114,7 +114,7 @@ def test_predire_affiche_le_champ_fautif_sur_un_422(monkeypatch):
 
 def test_predire_signale_une_api_injoignable(monkeypatch):
     """Si l'API ne répond pas, l'utilisateur doit le savoir explicitement."""
-    def faux_post(url, json, timeout):
+    def faux_post(url, json, timeout, **kwargs):
         raise httpx.RequestError("connexion refusée")
 
     monkeypatch.setattr("api.gradio_app.httpx.post", faux_post)

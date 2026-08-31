@@ -5,6 +5,7 @@ import os
 # load_dotenv() n'ecrase pas une variable deja definie : une chaine vide
 # suffit a desactiver la journalisation.
 os.environ["DATABASE_URL"] = ""
+os.environ["API_KEY"] = ""
 
 import pytest
 from fastapi.testclient import TestClient
