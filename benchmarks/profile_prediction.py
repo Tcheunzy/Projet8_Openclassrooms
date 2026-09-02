@@ -128,6 +128,21 @@ def main():
     print(f"Probabilité de contrôle  : {proba:.6f}")
     print()
 
+    # perf_counter mesure le temps écoulé, process_time le temps réellement
+    # consommé par le processeur. Un rapport proche de 100 % démontre que le
+    # pipeline est limité par le calcul et non par une attente — c'est ce qui
+    # explique qu'un hébergement à 0,1 CPU multiplie la latence par quarante.
+    debut, debut_cpu = time.perf_counter(), time.process_time()
+    for _ in range(100):
+        predire_chronometre(ml, payload)
+    ecoule = time.perf_counter() - debut
+    processeur = time.process_time() - debut_cpu
+
+    print(f"Temps écoulé sur 100 prédictions    : {ecoule * 1000:.1f} ms")
+    print(f"Temps processeur consommé           : {processeur * 1000:.1f} ms")
+    print(f"Part du temps passée à calculer     : {processeur / ecoule:.0%}")
+    print()
+
     tableau = mesurer_par_etape(ml, payload)
     total = tableau["ms"].sum()
     print(f"Répartition du temps sur 100 prédictions ({total:.1f} ms au total)")

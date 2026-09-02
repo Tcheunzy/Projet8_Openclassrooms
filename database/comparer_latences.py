@@ -12,17 +12,19 @@ BASCULE = "2026-08-31 13:31:00+00"
 # La table ne conserve pas l'origine de l'appel. En local le pipeline répond
 # en une trentaine de millisecondes, sur Render en plusieurs centaines : le
 # seuil sépare donc proprement les deux populations, sans recouvrement.
-SEUIL_PRODUCTION_MS = 150
+
 
 REQUETE = """
 SELECT
   CASE WHEN created_at < %(bascule)s THEN 'avant' ELSE 'apres' END AS version,
   COUNT(*) AS n,
   ROUND(MIN(latency_ms)::numeric, 0) AS min_ms,
-  ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY latency_ms)::numeric, 0) AS mediane_ms,
-  ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms)::numeric, 0) AS p95_ms
+  ROUND(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY latency_ms)::numeric, 0)
+        AS mediane_ms,
+  ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms)::numeric, 0)
+        AS p95_ms
 FROM predictions
-WHERE latency_ms > %(seuil)s
+WHERE origine = 'production'
 GROUP BY 1
 ORDER BY 1 DESC;
 """
@@ -31,11 +33,9 @@ ORDER BY 1 DESC;
 def main() -> None:
     load_dotenv(".env")
     with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
-        lignes = conn.execute(
-            REQUETE, {"bascule": BASCULE, "seuil": SEUIL_PRODUCTION_MS}
-        ).fetchall()
+        lignes = conn.execute(REQUETE, {"bascule": BASCULE}).fetchall()
 
-    print(f"Appels de production (> {SEUIL_PRODUCTION_MS} ms)\n")
+    print("Appels de production\n")
     print(f"{'version':<8} {'n':>6} {'min':>9} {'médiane':>10} {'p95':>10}")
     for ligne in lignes:
         print(f"{ligne['version']:<8} {ligne['n']:>6} "

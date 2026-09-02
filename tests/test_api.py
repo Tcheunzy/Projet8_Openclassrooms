@@ -3,7 +3,8 @@
 Le client de test charge le modèle et les artefacts via le lifespan ;
 aucun serveur MLflow ni fichier de data/ n'est nécessaire.
 """
-
+import pytest
+from api.schemas import ClientPredictionInput
 
 def test_root_renvoie_200(client):
     response = client.get("/")
@@ -166,3 +167,23 @@ def test_predict_accepte_la_bonne_cle(client, monkeypatch):
                            headers={"X-API-Key": "secret-de-test"})
 
     assert response.status_code == 200
+
+def test_le_banc_dessai_reproduit_l_api(client):
+    """Le banc d'essai duplique volontairement la logique de l'endpoint.
+
+    Ce test garantit que la duplication reste fidèle : si l'un des deux
+    chemins évolue sans l'autre, les probabilités divergeront et la CI
+    échouera, au lieu de mesurer silencieusement autre chose que la
+    production.
+    """
+    from benchmarks.profile_prediction import (DOSSIER, charger_artefacts,
+                                               predire_chronometre)
+
+    ml_banc, _ = charger_artefacts()
+    proba_banc, _ = predire_chronometre(ml_banc,
+                                        ClientPredictionInput(**DOSSIER))
+
+    reponse = client.post("/predict", json=DOSSIER)
+
+    assert reponse.status_code == 200
+    assert reponse.json()["probability"] == pytest.approx(proba_banc, abs=1e-9)
