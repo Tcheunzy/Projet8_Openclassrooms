@@ -15,7 +15,7 @@ API_URL = os.getenv("API_URL", f"http://localhost:{os.getenv('PORT', '8000')}")
 # par HTTP comme n'importe quel client : elle doit donc s'authentifier comme
 # n'importe quel client. C'est la contrepartie du choix d'en faire un client
 # et non un appelant direct du pipeline.
-API_KEY = os.getenv("API_KEY")
+
 
 # Doit correspondre exactement au Literal de api/schemas.py
 EDUCATION = [
@@ -28,10 +28,16 @@ EDUCATION = [
 
 
 def entetes() -> dict:
-    """En-têtes de la requête, avec la clé d'API si elle est configurée."""
+    """En-têtes de la requête, avec la clé d'API si elle est configurée.
+
+    La clé est lue à chaque appel et non à l'import : `load_dotenv()` est
+    exécuté par api/main.py *après* l'import de ce module, si bien qu'une
+    valeur figée à l'import serait toujours nulle en local.
+    """
     valeurs = {"Content-Type": "application/json"}
-    if API_KEY:
-        valeurs["X-API-Key"] = API_KEY
+    cle = os.getenv("API_KEY")
+    if cle:
+        valeurs["X-API-Key"] = cle
     return valeurs
 
 

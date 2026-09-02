@@ -252,6 +252,11 @@ effectifs, bornes = np.histogram(reussies["probability"], bins=20, range=(0, 1))
 st.bar_chart(pd.DataFrame({"effectif": effectifs},
                           index=np.round(bornes[:-1], 2)))
 st.caption("Seuil de décision : 0,24 — au-delà, le dossier est refusé.")
+st.caption(
+    f"{len(detail)} colonnes analysées sur {len(reference.columns) - 1}. "
+    "Une variable sans aucune valeur sur la période est écartée : il n'y a "
+    "rien à comparer."
+)
 
 
 # --------------------------------------------------------------- dérive
