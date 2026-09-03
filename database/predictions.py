@@ -40,7 +40,7 @@ STATUT_SUCCES = "succes"
 STATUT_VALIDATION = "validation"
 STATUT_ERREUR = "erreur"
 
-
+# Permet la création du pool de connexions à la BDD
 def create_pool(min_size: int = 1, max_size: int = 4) -> ConnectionPool:
     """Ouvre un réservoir de connexions réutilisables."""
     return ConnectionPool(
@@ -63,7 +63,7 @@ def init_schema(pool: ConnectionPool) -> None:
     with pool.connection() as conn:
         conn.execute(SCHEMA)
 
-
+#Permet l'écriture dans la BDD
 def log_prediction(pool: ConnectionPool, *, model_version, threshold, features,
                    sk_id_curr=None, probability=None, decision=None,
                    history_found=None, latency_ms=None,
@@ -88,7 +88,7 @@ def log_prediction(pool: ConnectionPool, *, model_version, threshold, features,
              Jsonb(features)),
         )
 
-
+# Permet la lecture dans la BDD
 def fetch_predictions(pool: ConnectionPool, since=None, limit=None,
                       status=None) -> pd.DataFrame:
     """Relit les appels, pour le tableau de bord et l'analyse de dérive.
