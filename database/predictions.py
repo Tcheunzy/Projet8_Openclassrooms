@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     latency_ms      INTEGER,
     status          TEXT             NOT NULL DEFAULT 'succes',
     error_type      TEXT,
+    origine         TEXT             NOT NULL DEFAULT 'local',
     features        JSONB            NOT NULL
 );
 
@@ -31,6 +32,8 @@ CREATE INDEX IF NOT EXISTS idx_predictions_sk_id_curr
     ON predictions (sk_id_curr);
 CREATE INDEX IF NOT EXISTS idx_predictions_status
     ON predictions (created_at DESC, status);
+CREATE INDEX IF NOT EXISTS idx_predictions_origine
+    ON predictions (origine, created_at DESC);
 """
 
 STATUT_SUCCES = "succes"
@@ -64,23 +67,25 @@ def init_schema(pool: ConnectionPool) -> None:
 def log_prediction(pool: ConnectionPool, *, model_version, threshold, features,
                    sk_id_curr=None, probability=None, decision=None,
                    history_found=None, latency_ms=None,
-                   status=STATUT_SUCCES, error_type=None) -> None:
+                   status=STATUT_SUCCES, error_type=None,
+                   origine="local") -> None:
     """Enregistre un appel à /predict, réussi ou non.
 
-    Les arguments sont nommés obligatoirement. Seuls la version du modèle, le
-    seuil et les données reçues sont exigés : tout le reste dépend de l'issue
-    de l'appel.
+    `origine` désigne l'environnement qui a servi la requête, pas l'appelant :
+    c'est ce qui permet de comparer des latences comparables entre elles.
     """
     with pool.connection() as conn:
         conn.execute(
             """
-            INSERT INTO predictions (sk_id_curr, model_version, threshold, probability,
-                                     decision, history_found, latency_ms,
-                                     status, error_type, features)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO predictions (sk_id_curr, model_version, threshold,
+                                     probability, decision, history_found,
+                                     latency_ms, status, error_type, origine,
+                                     features)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (sk_id_curr, model_version, threshold, probability, decision,
-             history_found, latency_ms, status, error_type, Jsonb(features)),
+             history_found, latency_ms, status, error_type, origine,
+             Jsonb(features)),
         )
 
 

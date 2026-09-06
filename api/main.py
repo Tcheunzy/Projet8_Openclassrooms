@@ -50,6 +50,7 @@ logger = logging.getLogger("api")
 ROOT = Path(__file__).resolve().parent.parent
 THRESHOLD = float(os.getenv("THRESHOLD", "0.24"))
 MODEL_VERSION = os.getenv("MODEL_VERSION", "4")
+ORIGINE = os.getenv("ENVIRONNEMENT", "local")
 
 HISTORY_TABLES = [
     "bureau_agg", "previous_agg", "cc_agg",
@@ -159,6 +160,7 @@ async def journaliser_les_rejets(request: Request, exc: RequestValidationError):
             sk_id_curr=corps.get("SK_ID_CURR"),
             status=STATUT_VALIDATION,
             error_type=error_type,
+            origine=ORIGINE,
         ),
     )
 
@@ -226,6 +228,7 @@ def predict(payload: ClientPredictionInput, background_tasks: BackgroundTasks):
             history_found=history_found,
             latency_ms=int((time.perf_counter() - debut) * 1000),
             status=STATUT_SUCCES,
+            origine=ORIGINE,
             features=features,
         )
 
@@ -252,6 +255,7 @@ def predict(payload: ClientPredictionInput, background_tasks: BackgroundTasks):
             latency_ms=int((time.perf_counter() - debut) * 1000),
             status=STATUT_ERREUR,
             error_type=type(exc).__name__,
+            origine=ORIGINE,
         )
         raise HTTPException(status_code=500, detail=f"Erreur lors de la prédiction : {exc}")
 

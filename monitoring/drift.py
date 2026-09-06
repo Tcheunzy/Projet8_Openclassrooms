@@ -32,6 +32,22 @@ def types_de_colonnes(reference: pd.DataFrame) -> tuple[list[str], list[str]]:
 
 def construire_rapport(reference: pd.DataFrame, courant: pd.DataFrame):
     numeriques, categorielles = types_de_colonnes(reference)
+
+    # La référence fait foi sur les types, mais le jeu courant est reconstruit
+    # depuis du JSON : une variable facultative jamais renseignée sur la
+    # période arrive en dtype object. Evidently applique np.isinf aux colonnes
+    # déclarées numériques et échouerait.
+    courant = courant.copy()
+    for colonne in numeriques:
+        courant[colonne] = pd.to_numeric(courant[colonne], errors="coerce")
+
+    # Une colonne sans aucune valeur sur la période ne peut pas être comparée :
+    # Evidently lève une erreur plutôt que de renvoyer un score. On l'écarte,
+    # ce qui est aussi le comportement juste — il n'y a rien à mesurer.
+    renseignees = [c for c in courant.columns if courant[c].notna().any()]
+    numeriques = [c for c in numeriques if c in renseignees]
+    categorielles = [c for c in categorielles if c in renseignees]
+
     definition = DataDefinition(numerical_columns=numeriques,
                                 categorical_columns=categorielles)
 
@@ -42,7 +58,6 @@ def construire_rapport(reference: pd.DataFrame, courant: pd.DataFrame):
 
     rapport = Report([DataDriftPreset()])
     return rapport.run(reference_data=jeu_reference, current_data=jeu_courant)
-
 
 def resume_derive(instantane) -> tuple[dict, pd.DataFrame]:
     """Extrait le bilan global et le détail colonne par colonne."""
