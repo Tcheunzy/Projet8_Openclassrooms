@@ -22,7 +22,7 @@ def apply_document_grouping(df: pd.DataFrame, flag_cols: list) -> pd.DataFrame:
     """
     Regroupe plusieurs colonnes FLAG_DOCUMENT_* quasi-constantes en une seule
     colonne TOTAL_DOCUMENTS_PROVIDED (nombre de documents fournis), puis supprime
-    les colonnes d'origine.
+    les colonnes d'origine. Réduction de dimension métier
     """
     df = df.copy()
     df["TOTAL_DOCUMENTS_PROVIDED"] = df[flag_cols].sum(axis=1)  # somme ligne par ligne des flags (0/1)

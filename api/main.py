@@ -183,6 +183,7 @@ def health_check():
         "model_version": MODEL_VERSION,
         "journalisation": ml.get("pool") is not None,
         "authentification": bool(os.getenv("API_KEY")),
+        "origine": ORIGINE,
     }
 
 
