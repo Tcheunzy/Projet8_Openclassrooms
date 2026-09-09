@@ -3,6 +3,12 @@
 Le client de test charge le modèle et les artefacts via le lifespan ;
 aucun serveur MLflow ni fichier de data/ n'est nécessaire.
 """
+
+# Probabilité du modèle version 4 sur le dossier de référence.
+# Elle DOIT changer lors d'un réentraînement : mettre cette valeur à jour est
+# le moment où l'on accepte consciemment un nouveau modèle.
+PROBA_REFERENCE = 0.10764399108192464        
+
 import pytest
 from api.schemas import ClientPredictionInput
 
@@ -187,3 +193,15 @@ def test_le_banc_dessai_reproduit_l_api(client):
 
     assert reponse.status_code == 200
     assert reponse.json()["probability"] == pytest.approx(proba_banc, abs=1e-9)
+
+def test_le_modele_servi_est_bien_celui_attendu(client, valid_payload):
+    """Verrouille la valeur produite, pas seulement sa forme.
+
+    Les autres tests vérifient qu'une probabilité est renvoyée et qu'elle est
+    dans [0, 1] ; le test de garde vérifie que le banc et l'API sont d'accord
+    — mais tous deux chargent le même artefact. Celui-ci est le seul qui
+    détecterait model.joblib remplacé par un autre modèle.
+    """
+    reponse = client.post("/predict", json=valid_payload)
+    assert reponse.status_code == 200
+    assert reponse.json()["probability"] == pytest.approx(PROBA_REFERENCE, abs=1e-4)
